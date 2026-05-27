@@ -62,10 +62,13 @@ jobs:
           SARIF_SHA: ${{ steps.cepheus.outputs.sarif-sha256 }}
           PASSED: ${{ steps.cepheus.outputs.passed }}
         run: |
-          # Route every output through env: rather than directly
-          # interpolating ${{ ... }} into bash. This is overkill for
-          # the action's own well-bounded outputs but keeps the
-          # script-injection-hardening pattern uniform with action.yml.
+          # Route every action output through env: rather than directly
+          # interpolating GitHub Actions expressions into bash. This is
+          # overkill for the action's own well-bounded outputs but
+          # keeps the script-injection-hardening pattern uniform with
+          # action.yml — and the literal double-brace token can't even
+          # appear in a comment without tripping the GitHub Actions
+          # expression parser, which scans run-scalars greedily.
           if [ -z "$SARIF_PATH" ]; then
             echo "::error::sarif-path output is empty"
             exit 1
