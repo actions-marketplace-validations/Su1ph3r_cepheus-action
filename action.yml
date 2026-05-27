@@ -1,8 +1,6 @@
 name: Cepheus Container Escape Scanner
 description: >-
-  Scan a container image for escape paths. Builds posture, ranks chains,
-  emits SARIF for GitHub Code Scanning, and optionally fails the build
-  on severity or baseline-regression thresholds.
+  Scans containers for escape paths. Ranks chains, emits SARIF for Code Scanning. Severity + regression CI gates.
 author: Su1ph3r
 branding:
   icon: shield
