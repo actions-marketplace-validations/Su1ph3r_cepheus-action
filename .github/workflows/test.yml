@@ -1,0 +1,126 @@
+name: test
+
+# Self-test of this action against a known upstream image. Runs the
+# composite action via ``uses: ./`` (so the action.yml at the repo
+# root is exercised exactly as a consumer would invoke it) and
+# asserts the outputs are shaped correctly. Catches end-to-end
+# regressions — broken PyPI install, broken SARIF emit, output
+# plumbing drift — before they reach Marketplace consumers.
+#
+# Why nginx:1.27-alpine: small, well-known, free of access-token
+# requirements, and stable enough that a "the upstream changed"
+# explanation is rarely the right diagnosis when this goes red.
+#
+# This workflow is intentionally NOT mirrored from
+# Su1ph3r/Cepheus's cepheus-action/ source tree — it's specific to
+# the standalone repo's release-readiness story. The monorepo's
+# sync workflow preserves ``.github/`` on this side precisely so
+# this file survives every sync.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  # Weekly cron catches "upstream regression" failure modes (a
+  # transitive PyPI dep changes behaviour, GHCR layer churn changes
+  # the alpine base image) without waiting for a release cut.
+  schedule:
+    - cron: "0 12 * * 1"
+
+# Least-privilege. SARIF upload is disabled in the test so we don't
+# need security-events: write — the smoke test isn't a real scan.
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: scan nginx:1.27-alpine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Self-test the action
+        id: cepheus
+        uses: ./
+        with:
+          image: nginx:1.27-alpine
+          # max-severity is intentionally empty: the test asserts the
+          # action's OUTPUT SHAPE (SARIF present, chain-count parses,
+          # sha256 set), not a security verdict. Findings on
+          # nginx:alpine are stable but not zero, and gating here
+          # would couple test stability to upstream technique
+          # additions.
+          max-severity: ""
+          upload-sarif: false
+
+      - name: Assert outputs shaped correctly
+        env:
+          SARIF_PATH: ${{ steps.cepheus.outputs.sarif-path }}
+          CHAIN_COUNT: ${{ steps.cepheus.outputs.chain-count }}
+          SARIF_SHA: ${{ steps.cepheus.outputs.sarif-sha256 }}
+          PASSED: ${{ steps.cepheus.outputs.passed }}
+        run: |
+          # Route every output through env: rather than directly
+          # interpolating ${{ ... }} into bash. This is overkill for
+          # the action's own well-bounded outputs but keeps the
+          # script-injection-hardening pattern uniform with action.yml.
+          if [ -z "$SARIF_PATH" ]; then
+            echo "::error::sarif-path output is empty"
+            exit 1
+          fi
+          if [ ! -s "$SARIF_PATH" ]; then
+            echo "::error::SARIF file at $SARIF_PATH is missing or empty"
+            exit 1
+          fi
+          if [ -z "$CHAIN_COUNT" ]; then
+            echo "::error::chain-count output is empty"
+            exit 1
+          fi
+          if [ "$CHAIN_COUNT" = "unknown" ]; then
+            # The action emits "unknown" only when the SARIF couldn't
+            # be parsed — a real bug, not a clean "zero findings."
+            echo "::error::chain-count='unknown' — Cepheus produced an unparseable SARIF"
+            exit 1
+          fi
+          # chain-count must be a decimal integer in the non-unknown case.
+          case "$CHAIN_COUNT" in
+            ''|*[!0-9]*)
+              echo "::error::chain-count='$CHAIN_COUNT' is not a decimal integer"
+              exit 1
+              ;;
+          esac
+          # sarif-sha256 must be exactly 64 hex chars (SHA-256 hex digest).
+          if [ "${#SARIF_SHA}" -ne 64 ]; then
+            echo "::error::sarif-sha256 wrong length: got ${#SARIF_SHA} chars, expected 64. value='$SARIF_SHA'"
+            exit 1
+          fi
+          case "$SARIF_SHA" in
+            *[!0-9a-fA-F]*)
+              echo "::error::sarif-sha256 contains non-hex characters: '$SARIF_SHA'"
+              exit 1
+              ;;
+          esac
+          # ``passed`` should be "true" when no max-severity gate is
+          # configured — a non-true value means the scan step itself
+          # failed (analyzer crash, docker pull failure, etc.) and
+          # the action wrapper masked it.
+          if [ "$PASSED" != "true" ]; then
+            echo "::error::passed='$PASSED' — scan failed (no max-severity was set, so the only way passed=false is an internal scan error)"
+            exit 1
+          fi
+          echo "All output assertions passed."
+          echo "  sarif-path:   $SARIF_PATH ($(wc -c < "$SARIF_PATH") bytes)"
+          echo "  chain-count:  $CHAIN_COUNT"
+          echo "  sarif-sha256: $SARIF_SHA"
+          echo "  passed:       $PASSED"
+
+      - name: Upload SARIF as artifact (for debugging on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cepheus-sarif-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.cepheus.outputs.sarif-path }}
+          if-no-files-found: warn
+          retention-days: 14
