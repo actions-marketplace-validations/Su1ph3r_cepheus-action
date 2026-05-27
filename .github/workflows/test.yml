@@ -124,6 +124,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cepheus-sarif-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.cepheus.outputs.sarif-path }}
+          # Hardcoded path rather than ``steps.cepheus.outputs.sarif-path``
+          # because that output is empty when the cepheus step fails
+          # before writing a SARIF — and the empty-string ``path:``
+          # makes upload-artifact itself error, masking the real
+          # diagnostic on the failing step. ``cepheus.sarif`` is the
+          # action.yml ``output:`` default; if the SARIF doesn't exist
+          # at this path, ``if-no-files-found: warn`` handles it
+          # gracefully and the actual diagnostic stays on the cepheus
+          # step's red marker.
+          path: cepheus.sarif
           if-no-files-found: warn
           retention-days: 14
