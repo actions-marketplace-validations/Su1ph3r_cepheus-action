@@ -51,16 +51,21 @@ jobs:
         run: |
           python -m pip install --quiet pyyaml
           ver=$(python -c "import yaml; print(yaml.safe_load(open('action.yml'))['inputs']['cepheus-version']['default'])")
-          echo "Action installs cepheus-engine==$ver; waiting for it on PyPI"
+          echo "Action installs cepheus-engine==$ver; waiting until it is installable from PyPI"
+          # Probe with pip itself (the simple index), not the JSON API. The two
+          # propagate through separate CDN caches, and the JSON endpoint can
+          # report a version that `pip install` still can't resolve — exactly
+          # the race that let this self-test run before the publish landed.
+          pooldir=$(mktemp -d)
           for i in $(seq 1 40); do
-            if curl -fsSL "https://pypi.org/pypi/cepheus-engine/$ver/json" >/dev/null 2>&1; then
-              echo "cepheus-engine==$ver is published"
+            if python -m pip download --no-deps --no-cache-dir "cepheus-engine==$ver" -d "$pooldir" >/dev/null 2>&1; then
+              echo "cepheus-engine==$ver is installable"
               exit 0
             fi
-            echo "  not on PyPI yet ($i/40); sleeping 30s"
+            echo "  not installable yet ($i/40); sleeping 30s"
             sleep 30
           done
-          echo "::error::cepheus-engine==$ver did not appear on PyPI within 20 minutes"
+          echo "::error::cepheus-engine==$ver was not installable from PyPI within 20 minutes"
           exit 1
 
       - name: Self-test the action
