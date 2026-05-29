@@ -41,6 +41,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Wait for the action's cepheus-engine version on PyPI
+        # The monorepo mirrors a new release here in parallel with the
+        # upstream release pipeline, whose PyPI publish runs last. This
+        # action installs a pinned cepheus-engine==<default>, so poll PyPI
+        # for that version instead of racing the publish and failing the
+        # install. Bounded, so a genuinely-missing version still fails loud
+        # rather than hanging.
+        run: |
+          python -m pip install --quiet pyyaml
+          ver=$(python -c "import yaml; print(yaml.safe_load(open('action.yml'))['inputs']['cepheus-version']['default'])")
+          echo "Action installs cepheus-engine==$ver; waiting for it on PyPI"
+          for i in $(seq 1 40); do
+            if curl -fsSL "https://pypi.org/pypi/cepheus-engine/$ver/json" >/dev/null 2>&1; then
+              echo "cepheus-engine==$ver is published"
+              exit 0
+            fi
+            echo "  not on PyPI yet ($i/40); sleeping 30s"
+            sleep 30
+          done
+          echo "::error::cepheus-engine==$ver did not appear on PyPI within 20 minutes"
+          exit 1
+
       - name: Self-test the action
         id: cepheus
         uses: ./
